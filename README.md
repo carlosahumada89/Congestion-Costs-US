@@ -1,3 +1,5 @@
 # congestion-costs-us
 
+Introduction 
+
 Traffic jams are a problem that increasingly affect citizens in cities around the world. The costs of being stucked in congestions can range from health (stress) and environmental (pollution) negative consequences, to monetary losses. The Bureau of Transportation Statistics from the United States Department of Transportation published a [dataset](https://www.bts.dot.gov/) that contains information for 101 urban areas in the U.S. on total population, average cost of gasoline, number of rush hours, total hours of delay, number of vehicles commuting per day, and others. With this information, applying a Random Fores algorithm, I am going to try to predict the annual cost per auto of congestion in 2014 taking into account selected variables. 2014 was slected due to its data completeness. Afterwards, other models will be implemented to compare the performance of the Random Forest approach. Finally, I am going to implement a class imbalance solution for the Random Forest model and compare the results with a Naive Bayes approach.
