@@ -1,0 +1,250 @@
+---
+title: "Congestion Costs in Urban Areas in the U.S."
+author: "Carlos Ahumada"
+date: "March 28, 2019"
+output:
+  html_notebook:
+    toc: true 
+    toc_depth: 3  
+    theme: united  
+    highlight: tango  
+---
+
+
+Traffic jams are a problem that increasingly affect citizens in cities around the world. The costs of being stucked in congestions can range from health (stress) and environmental (pollution) negative consequences, to monetary losses. The Bureau of Transportation Statistics from the United States Department of Transportation published a [dataset](https://www.bts.dot.gov/) that contains information for 101 urban areas in the U.S. on total population, average cost of gasoline, number of rush hours, total hours of delay, number of vehicles commuting per day, and others. With this information, applying a Random Fores algorithm, I am going to try to predict the annual cost per auto of congestion in 2014 taking into account selected variables. 2014 was slected due to its data completeness. Afterwards, other models will be implemented to compare the performance of the Random Forest approach. Finally, I am going to implement a class imbalance solution for the Random Forest model and compare the results with a Naive Bayes approach.
+
+#Preparation 
+
+##Libraries
+```{r}
+library (randomForest)
+library (dplyr)
+library (magrittr)
+library (caret)
+library (ROSE)
+library(DMwR)
+library (e1071)
+library (knitr)
+```
+
+
+##Datset Loading and Cleaning
+```{r}
+#Loading Dateset
+congestion <- read.csv("C:/Users/carlo/Desktop/congestion.csv", colClasses="character")
+str(congestion)
+```
+##Data cleaning 
+```{r include=FALSE}
+#Getting rid of commas 
+com <-  4:length(congestion)
+congestion[,com] <- lapply(congestion[,com],function(x){as.numeric(gsub(",", "", x))})
+
+#Renaming column
+names(congestion)[names(congestion) == "?..urban_area"] <- "urban_area"
+
+#Selecting 2014
+congestion <- congestion [ congestion$year==2014, ]
+
+#reclassifying variables
+congestion$population_group <- as.factor(congestion$population_group)
+congestion$year <- as.factor(congestion$year)
+str(congestion)
+```
+
+
+#Random Forest imbalanced class
+Event though the dataset is small (101 observations), Random Forest can perform well thanks to bootstraping. In order to be able to apply class imbalance solutions, I am going to create a new variable based on the annual cost per auto (high (1) and low (0) cost). This is the dependent variable that I am going to predict using total population, the number of autos commuting, the freeway daily miles, the arterial daily miles, the average state gasoline cost, the average state diesiel cost, the annual excess galons pero auto and the number of rush hours. Please not that some variables like total population contain a 000 notation. This indicates that the number reported is the original figure divided by a thousand. 
+
+```{r}
+#Creating outcome variable (high or low annual cost)
+congestion$cost_high_low <- ifelse(congestion$cost_per_auto_dollars > mean(congestion$cost_per_auto_dollars), 
+                                   1, 0)
+congestion$cost_high_low <- as.factor(congestion$cost_high_low)
+#splitting dataset into train and test
+sample_size <- floor(0.50 * nrow(congestion))
+set.seed(1628)
+congestion_index <- sample(seq_len(nrow(congestion)), size = sample_size)
+train <- congestion[congestion_index, ]
+test <- congestion[-congestion_index, ]
+
+#Running Model
+set.seed(1628)
+rf.congestion = randomForest(cost_high_low ~ total_population_000 + auto_comuters_000 +
+                               freeway_daily_miles_000 +arterial_daily_miles_000 + average_state_gasoline_cost + 
+                               average_state_diesel_cost + number_of_rush_hrs, 
+                               data=train, ntree=100, importance=T)
+
+print(rf.congestion)
+```
+
+The OOB estimate of error rate is 32%. This means that we failed to correctly classify observations in 32% of the cases. However, this accuracy should be taken carefully for two reasons. First, this is the OOB error rate, not the test error rate. Second, we have a severe class imbalance in the dependent variable: 
+
+```{r}
+table(congestion$cost_high_low)
+```
+
+```{r}
+#Visualizing the importance of the variables
+importance (rf.congestion)
+```
+
+```{r}
+#Visualizing the importance of the variables II
+varImpPlot (rf.congestion)
+```
+
+In both the table and the plot, it can be seen that the number of arterial daily miles and number of rush hours are the two most important variables in terms of accuracy for the model. If we would get rid of those variables, the accuracy of the model would suffer substantially. On the other hand, total population and the number of rush hours are the most important variables for the Gini index. This means that getting rid of these three variables would affect the Gini impurity used for the calculation of splits in trees. 
+
+##calculating the optimal mtry value
+
+```{r}
+df <- congestion[ ,c("cost_high_low", "total_population_000", "auto_comuters_000", "freeway_daily_miles_000",
+                            "arterial_daily_miles_000", "average_state_gasoline_cost", "average_state_diesel_cost", "number_of_rush_hrs")]  
+  
+mtry <- tuneRF(df[-1], df$cost_high_low, ntreeTry=500,
+               stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+print(mtry)
+print(best.m)
+```
+The mtry (Number of variables randomly sampled as candidates at each split) with the lowest OOB error rate is 2. In our first Random Forest model the mtry selected by default was also 2. There is no need to try it with another mtry.  
+
+##running model on test set
+```{r}
+yhat.rf = predict(rf.congestion ,newdata=test)
+confusionMatrix(yhat.rf, test$cost_high_low, mode = "prec_recall", positive="1")
+```
+
+The acurracy of our model on the test set is 80.39%.  A relatively small precision number indicates that we have some false positives. However, recall reports 1, which is indicative of no false negatives. The F1 score reports .7727, a good score.The F1, which is the harmonic average of the precision and recall, is relatively high (F1 reaches its best value at 1 and worst at 0). The F1 score is especially useful in unbalanced class distribution. 
+
+```{r}
+accuracy.meas(test$cost_high_low, yhat.rf)
+```
+
+
+
+#Logistic Regression imbalanced class
+
+```{r}
+congestion_logit = glm(cost_high_low ~ total_population_000 + auto_comuters_000 +
+                               freeway_daily_miles_000 +arterial_daily_miles_000 + average_state_gasoline_cost + 
+                               average_state_diesel_cost + number_of_rush_hrs, family=binomial(link='logit'),data=train)
+summary (congestion_logit)
+```
+
+```{r}
+predictions = predict (congestion_logit, test, type= "response")
+results<- ifelse(predictions >0.5, 1, 0)
+results
+```
+
+```{r}
+results <- as.factor(results)
+confusionMatrix(results, test$cost_high_low, mode = "prec_recall", positive="1")
+```
+
+With a logistic regression, the acurracy of the model increases to 88.24%. In terms of accuracy, the logistic regression model performs better than the Random Forest in this case. Also, it is important to notice that the F1 score increases to .8571, higher than the .77 reported in the Random Forest Model. 
+
+#Class Imbalance solution
+```{r}
+## Smote : Synthetic Minority Oversampling Technique To Handle Class Imbalancy In Binary Classification
+str(train)
+train$year <- as.character(train$year)
+train$year <- as.numeric(train$year)
+train$urban_area <- as.factor(train$urban_area)
+
+congestion.balanced <- SMOTE(cost_high_low ~., train, perc.over = 100)
+table(congestion.balanced$cost_high_low)
+```
+
+#Random Forest with balanced data
+```{r}
+#Running Model
+set.seed(1628)
+rf.congestion2 = randomForest(cost_high_low ~ total_population_000 + auto_comuters_000 +
+                               freeway_daily_miles_000 +arterial_daily_miles_000 + average_state_gasoline_cost + 
+                               average_state_diesel_cost + number_of_rush_hrs, 
+                               data=congestion.balanced, ntree=100, importance=T)
+
+print(rf.congestion2)
+```
+Now, with a balanced class, the OOB error rate dropped to 7.14%. 
+
+```{r}
+#Visualizing the importance of the variables
+importance (rf.congestion2)
+```
+
+With the balance data, the number of rush hours, arterial daily miles and total population are the most important variable for the accurracy of the model. In terms of Gini impurity, the number of rush hours, total population and auto comuters are the most important ones. 
+
+
+##Model on Test data after class balance
+
+```{r}
+yhat.rf2 = predict(rf.congestion2 ,newdata=test)
+confusionMatrix(yhat.rf2, test$cost_high_low, mode = "prec_recall", positive="1")
+```
+
+The accuracy of the model for the test data drops to 78.43% after adjusting for the unbalance in the dependent variable. The F1 statistic also drops to .7556, compared to the .7727 obtained from the Random Forest Model with unbalanced class.
+
+#Logistic model with balanced data
+
+```{r}
+congestion_logit2 = glm(cost_high_low ~ total_population_000 + auto_comuters_000 +
+                               freeway_daily_miles_000 +arterial_daily_miles_000 + average_state_gasoline_cost + 
+                               average_state_diesel_cost + number_of_rush_hrs, family=binomial(link='logit'),data=congestion.balanced)
+summary (congestion_logit2)
+```
+
+
+```{r}
+predictions2 = predict (congestion_logit2, test, type= "response")
+results2 <- ifelse(predictions2 >0.5, 1, 0)
+results2
+```
+
+
+```{r}
+results2 <- as.factor(results2)
+confusionMatrix(results2, test$cost_high_low, mode = "prec_recall", positive="1")
+```
+When running the logistic model with balance date, the F1 score drops substantially to .7805. 
+
+
+#Naive Bayes
+
+```{r}
+NB =naiveBayes(cost_high_low ~ total_population_000 + auto_comuters_000 +
+                               freeway_daily_miles_000 +arterial_daily_miles_000 + average_state_gasoline_cost + 
+                               average_state_diesel_cost + number_of_rush_hrs, data=train)
+print(NB)
+```
+
+```{r}
+NB_Predictions=predict(NB, test)
+table(NB_Predictions, test$cost_high_low)
+```
+
+```{r}
+confusionMatrix(NB_Predictions, test$cost_high_low, mode = "prec_recall", positive="1")
+```
+
+With a Naive Bayes classifier, the accuracy of the predictions falls to 76.47%. The precision is 1, recall 0.5 and F1 .6667. This means that the model does a relatively good job in predicting outcomes with the selected variables, but not as good as the with the Random Forest model with balanced class. 
+
+#Conclusions
+As shown in the table below, the logistic models (balanced and imbalanced) outperformed both the Random Forest and the Naive Bayes models.The balanced logit model is chosen as the best model of all with a F1 score of .7805. However, it is important to notice that the Random Forest with balanced data is not that far in terms of performance to the logistic one. The worst model in terms of performance was Naive Bayes with .6667. 
+
+
+```{r}
+F1_Scores <- c(.7727, .8571, .7556, .7805, .6667)
+Models <- c("Imbalanced_RF", "Imbalanced_Logit", "Balanced_RF", "Balanced_Logit", "Naive Bayes")
+
+F1_totals <- cbind (Models, F1_Scores)
+F1_totals <- F1_totals [order(-F1_Scores), ]
+kable(F1_totals)
+```
+
+
+
+
